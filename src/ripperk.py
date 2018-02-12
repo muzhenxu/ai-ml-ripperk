@@ -44,6 +44,8 @@ meta = {
 
 def bindings(cases, rules):
     """
+    rules规则集命中的cases总数。交集关系，rules中每条规则都需要命中case，才算做命中该case。
+
     Finds the number of bindings to a training set on
     a given number of rules.
     
@@ -62,11 +64,12 @@ def bindings(cases, rules):
         
         rules_success = True
         
+        # TODO： 只要出现rule_success==false，rules_success就一定是False，可以直接break跳出，进入下一个for case。
         for rule in rules:
             
             rule_success = True
             
-            for attr, value in rule.iteritems():
+            for attr, value in rule.items():
                 if attr in case:
                     
                     attr_success = False
@@ -125,7 +128,7 @@ def classify(classes):
             # This case was satisfied by one of the non-default classes.
             found = False
             
-            for m, ruleset in model.iteritems():
+            for m, ruleset in model.items():
                 
                 # No need to continue of we found a rule that satisfies the case.
                 if found:
@@ -148,7 +151,7 @@ def classify(classes):
     
     # Output our results to the result file.
     output = "Class\t\t\tCases\t\t\tClassified\n\n"
-    for attr, result in results.iteritems():
+    for attr, result in results.items():
         total += result[0]
         classified += result[1]
         output += attr + "\t\t\t" + str(result[0]) + "\t\t\t" + str(result[1]) + "\n"
@@ -167,7 +170,7 @@ def create_attrs(f):
     
     Each key in the dictionary (attribute) contains a tuple 
     that has the attribute's index in the file (line number), 
-    wheter the attribute is continuous or discrete (True|False), 
+    whether the attribute is continuous or discrete (True|False),
     and a dictionary of possible values (each value records 
     the number of times that value was seen.  All are initialized 
     to zero).
@@ -234,7 +237,7 @@ def create_classes(f):
     
     # Build a reverse lookup dictionary for attribute index values.
     indices = {}
-    for attr, value in meta['attrs'].iteritems():
+    for attr, value in meta['attrs'].items():
         indices[value[0]] = attr
     
     for line in f:
@@ -257,7 +260,8 @@ def create_classes(f):
                         case[attr].append(value)
                     else:
                         case[attr] = [value]
-                    
+
+                    # TODO： 为什么对于连续型变量从0开始计数，而离散型从1开始计数
                     if value in meta['attrs'][attr][2]:
                         meta['attrs'][attr][2][value] += 1
                     else:
@@ -265,7 +269,7 @@ def create_classes(f):
                 else:
                     # Set the attribute and the value.
                     case[attr] = [value]
-                    
+
                     meta['attrs'][attr][2][value] += 1
             else:
                 c = value
@@ -299,6 +303,8 @@ def dl(rule):
     return int(0.5 * (math.log(k, 2) + p1 + p2))
     
 def foil(pos, neg, lit, rule, rules):
+    # 计算新规则加入后的gain
+    # TODO： 计算方式是（规则加入新条件后覆盖样本的正样本比例-旧规则覆盖样本正比例）* 新规则覆盖的正例数
     """
     FOIL-GAIN
     
@@ -350,6 +356,7 @@ def foil(pos, neg, lit, rule, rules):
     rules.append(rule)
     rules.append(new_rule)
     
+    # TODO： t和p1是一样的啊。。。同时满足rule和new_rule的就是满足new_rule，因为new_rule是rule的子集啊。。。
     t = bindings(pos, rules)
     
     # Pop both rules off of stack.
@@ -374,19 +381,20 @@ def grow_rule(pos, neg, rule=None, rules=None):
         rules = []
         
     while True:
-        max_gain = None
+        max_gain = -1000000
         max_condition = None
         
-        for attr, values in meta['attrs'].iteritems():
-            
+        for attr, values in meta['attrs'].items():
+
             # Can't add an attribute twice.
             if attr in rule:
                 continue
-            
+
             # Conditions for this attribute.
             conditions = []
-            
+
             # Continuous.
+            # TODO: 对于离散型变量，只需要看==，就可以涵盖所有情况，但是对于连续型变量，如果只看>=，其实只能看一半，因为规则只考虑单边，无法顾及<=的另一半。上下都加=，会对全覆盖情况多计算一次，或者说<=max和>=min这两条规则其实是重复的。如果是>和<=或相反，就不会。
             if values[1]:
                 for v in values[2].keys():
                     conditions.append((attr, (">=", v)))
@@ -395,19 +403,23 @@ def grow_rule(pos, neg, rule=None, rules=None):
             else:
                 for value in values[2].keys():
                     conditions.append((attr, ("==", value)))
-                
+
             # Check the gain for each condition.
+            # 基于所有特征的所有可能分割，找到gain最大的规则
             for condition in conditions:
                 gain = foil(pos, neg, condition, rule, rules)
                 if max_gain < gain:
                     max_condition = condition
                     max_gain = gain
-        
+
         # Add the new max condition.
         rule[max_condition[0]] = max_condition[1]
         rules.append(rule)
         
         # Check if it covers no negative cases.
+        # rules先append在pop，其实是不会变化的。之所以要先append是为了计算bindings， bindings(neg, rules)计算的是rules规则集交集命中的负样本数。
+        # 如果无增益，或者rules不命中任何负样本，则返回rule。
+        # TODO: 无增益好理解，为什么有bindings规则？
         if max_gain <= 0.0 or bindings(neg, rules) == 0:
             rules.pop()
             return rule
@@ -431,7 +443,8 @@ def irep(pos, neg):
     while pos:
         pos_len = len(pos)
         neg_len = len(neg)
-        
+
+        # TODO: if else反了吧，p=0才应该ratio=1，因为不剪枝
         if meta['opts']['p']:
             ratio = 1
         else:
@@ -484,7 +497,7 @@ def learn(classes):
     """
     # Sort our classes in order of least prevalence.  Because python works
     #  with lists backwards, it is going to run in reverse
-    items = classes.items()
+    items = list(classes.items())
     items.sort(key=lambda i: len(i[1]), reverse=True)
     
     # Get all the classes.
@@ -528,7 +541,7 @@ def learn(classes):
         str_ruleset = ""
         for rule in ruleset:
             str_rule = ""
-            for attr, value in rule.iteritems():
+            for attr, value in rule.items():
                 str_rule += str(attr) + " " + str(value[0]) + " " + str(value[1]) + " && "
             str_ruleset += str_rule[:-4] + " || "
         
@@ -552,7 +565,7 @@ def main():
     # Determine command line arguments
     try:
         opts, _ = getopt.getopt(sys.argv[1:], "e:a:c:t:m:o:k:p:")
-    except getopt.GetoptError, err:
+    except getopt.GetoptError as err:
         print(err)
         usage()
         sys.exit(2)
@@ -606,7 +619,8 @@ def main():
     if meta['opts']['e'] == 'learn':
         # Determine the total possible attribute combinations.
         #  a.k.a the "n" of MDL.
-        for attr, values in meta['attrs'].iteritems():
+        # TODO: 为什么mdl要如此定义？
+        for attr, values in meta['attrs'].items():
             # Continuous.
             if values[1]:
                 meta['n'] += 2 * len(values[2].keys())
