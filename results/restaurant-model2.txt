@@ -1,0 +1,2 @@
+IF Patrons == Full && Rain == No || Patrons == None THEN No
+ELSE Yes

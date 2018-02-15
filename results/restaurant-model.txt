@@ -1,0 +1,2 @@
+IF Alternate == No || Patrons == None || EstimateWait == 30-60 THEN No
+ELSE Yes

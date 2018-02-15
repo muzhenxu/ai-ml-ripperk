@@ -31,6 +31,7 @@ TODO: 如果依次学到A，B，C，只取两条，是不是选择A，B会更好
 import getopt
 import math
 import sys
+import time
 
 #
 # Global META variable.
@@ -54,6 +55,8 @@ meta = {
         # Growing to pruning set ratio.
         'ratio': 2 / float(3),
         }
+
+conditions = []
 
 def bindings(cases, rules):
     """
@@ -101,11 +104,12 @@ def bindings(cases, rules):
                 else:
                     rule_success = False
                 
-            if not rule_success:
-                rules_success = False
-        
-        if rules_success:
-            count += 1
+                if not rule_success:
+                    break
+
+            if rule_success:
+                count += 1
+                break
     
     return count
 
@@ -316,7 +320,7 @@ def dl(rule):
     
     return int(0.5 * (math.log(k, 2) + p1 + p2))
     
-def foil(pos, neg, lit, rule, rules):
+def foil(pos, neg, lit, rule, rules, p=0):
     # 计算新规则加入后的gain
     # TODO： 计算方式是（规则加入新条件后覆盖样本的正样本比例-旧规则覆盖样本正比例）* 新规则覆盖的正例数。加入新条件会导致覆盖的正cases减少，需要通过pos ratio的提升来弥补这一损失。具体为什么如此，需要看foil论文
     """
@@ -366,22 +370,16 @@ def foil(pos, neg, lit, rule, rules):
     else:
         d1 = math.log(float(p1) / (float(p1) + float(n1)), 2)
     
-    # Pop both rules on stack.
-    rules.append(rule)
-    rules.append(new_rule)
-    
-    # TODO： t和p1是一样的啊。。。同时满足rule和new_rule的就是满足new_rule，因为new_rule是rule的子集啊。。。
-    t = bindings(pos, rules)
-    
-    # Pop both rules off of stack.
-    rules.pop()
-    rules.pop()
-    
-    return t * (d1 - d0)
+    if p:
+        print('foil rule:', new_rule)
+        print('foil old rule:', p0, n0)
+        print('foil new rule', p1, n1)
+        print('foil', d1, d0)
+        print('foil gain:', p1*(d1 - d0))
+    return p1 * (d1 - d0)
 
 def grow_rule(pos, neg, rule=None, rules=None):
     """
-    # TODO: 如果rules确实应该是并集作用的话，那么grow过程只和growset以及rule初始状态有关，和rules无关
     Grows (adds conditions) to a rule until it matches no negative cases.
     
     Key arguments
@@ -395,38 +393,26 @@ def grow_rule(pos, neg, rule=None, rules=None):
     if rules == None:
         rules = []
         
+    for r in rules:
+        pos = remove_cases(pos, r)
+        neg = remove_cases(neg, r)
+
     while True:
         max_gain = -1000000
         max_condition = None
         
-        for attr, values in meta['attrs'].items():
-
+        # Check the gain for each condition.
+        # 基于所有特征的所有可能分割，找到gain最大的规则
+        for condition in conditions:
             # Can't add an attribute twice.
-            if attr in rule:
+            if condition[0] in rule:
                 continue
 
-            # Conditions for this attribute.
-            conditions = []
-
-            # Continuous.
-            # TODO: 对于离散型变量，只需要看==，就可以涵盖所有情况，但是对于连续型变量，如果只看>=，其实只能看一半，因为规则只考虑单边，无法顾及<=的另一半。上下都加=，会对全覆盖情况多计算一次，或者说<=max和>=min这两条规则其实是重复的。如果是>和<=或相反，就不会。
-            if values[1]:
-                for v in values[2].keys():
-                    conditions.append((attr, (">=", v)))
-                    conditions.append((attr, ("<=", v)))
-            # Discrete.
-            # TODO: 为什么只考虑==，不考虑不等于？
-            else:
-                for value in values[2].keys():
-                    conditions.append((attr, ("==", value)))
-
-            # Check the gain for each condition.
-            # 基于所有特征的所有可能分割，找到gain最大的规则
-            for condition in conditions:
-                gain = foil(pos, neg, condition, rule, rules)
-                if max_gain < gain:
-                    max_condition = condition
-                    max_gain = gain
+            gain = foil(pos, neg, condition, rule, rules)
+            if max_gain < gain:
+                max_condition = condition
+                max_gain = gain
+        gain = foil(pos, neg, max_condition, rule, rules, 1)
 
         # Add the new max condition.
         rule[max_condition[0]] = max_condition[1]
@@ -436,6 +422,7 @@ def grow_rule(pos, neg, rule=None, rules=None):
         # rules先append在pop，其实是不会变化的。之所以要先append是为了计算bindings， bindings(neg, rules)计算的是rules规则集交集命中的负样本数。
         # 如果无增益，停止rule学习。如果有增益，但是rule命中的样本已经没有neg存在了，也可以停止，没有继续学习的必要了。
         if max_gain <= 0.0 or bindings(neg, rules) == 0:
+            print('satisfy threshold-------------')
             rules.pop()
             return rule
         else:
@@ -454,17 +441,23 @@ def irep(pos, neg):
     
     # The minimum dl recorded.
     min_dl = meta['n']
-    
+
+    # TODO: if else反了吧，p=0才应该ratio=1，因为不剪枝
+    if not meta['opts']['p']:
+        ratio = 1
+    else:
+        ratio = meta['ratio']   
+
+    pos_old = list(pos)
     while pos:
+        if pos_old == pos:
+            print('irep same pos=============')
+        else:
+            print('irep diff pos=============')
+        time.sleep(1)
         pos_len = len(pos)
         neg_len = len(neg)
 
-        # TODO: if else反了吧，p=0才应该ratio=1，因为不剪枝
-        if meta['opts']['p']:
-            ratio = 1
-        else:
-            ratio = meta['ratio']
-        
         pos_chunk = int(pos_len * ratio)
         neg_chunk = int(neg_len * ratio)
         
@@ -478,6 +471,7 @@ def irep(pos, neg):
         grow_pos = pos[:pos_chunk]
         grow_neg = neg[:neg_chunk]
         rule = grow_rule(grow_pos, grow_neg)
+        print('irep----------', rule)       
         
         # Prune.
         if meta['opts']['p']:
@@ -486,7 +480,7 @@ def irep(pos, neg):
             rule = prune_rule(prune_pos, prune_neg, rule)
         
         rule_dl = dl(rule)
-        
+
         if min_dl + meta['d'] < rule_dl:
             return rule_set
         else:
@@ -498,8 +492,10 @@ def irep(pos, neg):
                 min_dl = rule_dl
             
             # Remove the cases found by rule.
+            pos_old = list(pos)
             pos = remove_cases(pos, rule)
             neg = remove_cases(neg, rule)
+        # print('irep------')
     
     return rule_set
 
@@ -523,6 +519,21 @@ def learn(classes):
     
     # Clean output
     output = ""
+    
+    # set init conditions
+    for attr, values in meta['attrs'].items():
+
+        # Continuous.
+        # TODO: 对于离散型变量，只需要看==，就可以涵盖所有情况，但是对于连续型变量，如果只看>=，其实只能看一半，因为规则只考虑单边，无法顾及<=的另一半。上下都加=，会对全覆盖情况多计算一次，或者说<=max和>=min这两条规则其实是重复的。如果是>和<=或相反，就不会。
+        if values[1]:
+            for v in values[2].keys():
+                conditions.append((attr, (">=", v)))
+                conditions.append((attr, ("<=", v)))
+        # Discrete.
+        # TODO: 为什么只考虑==，不考虑不等于？
+        else:
+            for value in values[2].keys():
+                conditions.append((attr, ("==", value)))
     
     while len(items) > 1:
         # Get the current class.
@@ -662,7 +673,6 @@ def optimize(pos, neg, ruleset):
     while i < len(new_ruleset):
         rule = new_ruleset.pop(i)
         
-        # 论文中生长过程应该是作用在growset，剪枝过程应该是作用在prunset上的
         # Grow a new rule that might replace the old one.
         reprule = grow_rule(pos, neg, rules=new_ruleset)
         if meta['opts']['p']:
@@ -709,7 +719,7 @@ def prune_rule(pos, neg, rule, rules=None):
     # Deep copy our rule.
     tmp_rule = dict(rule)
     # Append the rule to the rules list.
-    rules.append(rule)
+    rules.append(tmp_rule)
     
     p = bindings(pos, rules)
     n = bindings(neg, rules)
@@ -722,7 +732,7 @@ def prune_rule(pos, neg, rule, rules=None):
     max_rule = dict(tmp_rule)
     max_score = (p - n) / float(p + n)
     
-    keys = max_rule.keys()
+    keys = list(max_rule.keys())
     i = -1
     
     while len(tmp_rule.keys()) > 1:
