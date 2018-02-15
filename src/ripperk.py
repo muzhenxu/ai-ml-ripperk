@@ -15,6 +15,19 @@ The style guide follows the strict python PEP 8 guidelines.
 @course CSE 5800 Advanced Topics in CS: Learning/Mining and the Internet, Fall 2011
 @project Proj 01, RIPPERk
 """
+
+"""
+整体学习流程如下：
+1. 分割growset和prunset
+2. 对于growset， 运用irep学习规则集。
+   a. 运用foil在growset上学习单规则（一系列条件交集）,
+   b. 在prunset上进行剪枝
+   c. 该规则加入到ruleset中，剔除该规则覆盖样本，余下样本继续学习，直到ruleset不满足mdl条件
+3. 在完整dataset上对ruleset进行优化
+   最终学习到的ruleset是个无序规则集。试想下，先学到A rule，再学到B。那么即使互换A，B位置，B覆盖的样本要么是A中的一部分，要么就是余下样本中满足B条件的，换言之，打乱顺序最后覆盖到的样本是一样的。
+TODO: 如果依次学到A，B，C，只取两条，是不是选择A，B会更好呢？感觉并不是。甚至于不是其中任意两条的组合之一。一般会有这种需求，应该是因为学到规则覆盖样本的正例率不达到要求。那么应该通过设定条件的方式重新学习。
+      比如在foil过程中，强制要求正例率达到一定阈值，不然直接给出负gain。good！确实应该加入该条件来进行控制。同理，对规则覆盖的样本量也可以最小限制。有时并不苛求样本量，那么foil gain计算规则的方法是否合适呢？
+"""
 import getopt
 import math
 import sys
@@ -46,6 +59,7 @@ def bindings(cases, rules):
     """
     rules规则集命中的cases总数。交集关系，rules中每条规则都需要命中case，才算做命中该case。
 
+    # TODO: binding方法有问题。应该对于rule的conditions要求全部命中。对于ruleset的rules应该只要求一条命中。
     Finds the number of bindings to a training set on
     a given number of rules.
     
@@ -304,7 +318,7 @@ def dl(rule):
     
 def foil(pos, neg, lit, rule, rules):
     # 计算新规则加入后的gain
-    # TODO： 计算方式是（规则加入新条件后覆盖样本的正样本比例-旧规则覆盖样本正比例）* 新规则覆盖的正例数
+    # TODO： 计算方式是（规则加入新条件后覆盖样本的正样本比例-旧规则覆盖样本正比例）* 新规则覆盖的正例数。加入新条件会导致覆盖的正cases减少，需要通过pos ratio的提升来弥补这一损失。具体为什么如此，需要看foil论文
     """
     FOIL-GAIN
     
@@ -400,6 +414,7 @@ def grow_rule(pos, neg, rule=None, rules=None):
                     conditions.append((attr, (">=", v)))
                     conditions.append((attr, ("<=", v)))
             # Discrete.
+            # TODO: 为什么只考虑==，不考虑不等于？
             else:
                 for value in values[2].keys():
                     conditions.append((attr, ("==", value)))
@@ -418,8 +433,7 @@ def grow_rule(pos, neg, rule=None, rules=None):
         
         # Check if it covers no negative cases.
         # rules先append在pop，其实是不会变化的。之所以要先append是为了计算bindings， bindings(neg, rules)计算的是rules规则集交集命中的负样本数。
-        # 如果无增益，或者rules不命中任何负样本，则返回rule。
-        # TODO: 无增益好理解，为什么有bindings规则？
+        # 如果无增益，停止rule学习。如果有增益，但是rule命中的样本已经没有neg存在了，也可以停止，没有继续学习的必要了。
         if max_gain <= 0.0 or bindings(neg, rules) == 0:
             rules.pop()
             return rule
@@ -698,6 +712,7 @@ def prune_rule(pos, neg, rule, rules=None):
     p = bindings(pos, rules)
     n = bindings(neg, rules)
     
+    # TODO: 无效rule为何不直接返回空dict{}
     if p == 0 and n == 0:
         rules.pop()
         return tmp_rule
@@ -710,12 +725,15 @@ def prune_rule(pos, neg, rule, rules=None):
     
     while len(tmp_rule.keys()) > 1:
         # Remove the last attribute.
+        # 这里的删减是有序的。但是grow过程的condtition学习真的可以保证先学到的比后学到的好么？
         del tmp_rule[keys[i]]
         
+        # TODO: 这里有问题。rules根本没有改变。应该rules和tmp_rule挂钩，tmp_rule删除condition引起rules变化，这样才有意义。
         # Recalculate score.
         p = bindings(pos, rules)
         n = bindings(neg, rules)
         
+        # 不停的减少condition带来的是命中样本越来越多。只要原始rule不出现if情况，删减规则后更不可能出现。所以以下if判断完全没必要。
         if p == 0 and n == 0:
             continue
         
