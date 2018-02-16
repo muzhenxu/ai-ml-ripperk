@@ -1,1 +1,1 @@
-{'No': [{'Patrons': ('==', 'Full'), 'Rain': ('==', 'No')}, {'Patrons': ('==', 'None')}]}
+{'No': [{'Patrons': ('!=', 'Some'), 'Rain': ('==', 'No')}, {'Patrons': ('==', 'None')}]}

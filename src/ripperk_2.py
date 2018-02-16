@@ -98,6 +98,8 @@ def bindings(cases, rules):
                             attr_success = value[1] <= case_value
                         elif value[0] == "<=":
                             attr_success = value[1] >= case_value
+                        elif value[0] == "!=":
+                            attr_success = value[1] != case_value
                     
                     if not attr_success:
                         rule_success = False
@@ -534,6 +536,7 @@ def learn(classes):
         else:
             for value in values[2].keys():
                 conditions.append((attr, ("==", value)))
+                conditions.append((attr, ("!=", value)))
     
     while len(items) > 1:
         # Get the current class.
