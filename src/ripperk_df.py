@@ -14,6 +14,7 @@ class ripperk(object):
         self._get_conditions(df)
 
         items =  list(label.value_counts().sort_values(ascending=False).index)
+        self.items = list(items)
 
         while len(items) > 1:
             # get cls from end to start, from small to big
@@ -29,7 +30,6 @@ class ripperk(object):
             df = self.remove_cases(df, ruleset)
 
             self.rulesets[item] = ruleset
-
 
     def predict(self, df):
         pass
@@ -50,7 +50,7 @@ class ripperk(object):
             if self.prun_ratio > 0:
                 pos_prun = pos.iloc[pos_chunk:, :]
                 neg_prun = neg.iloc[neg_chunk:, :]
-                rule = self.prun(pos_prun, neg_prun, rule)
+                rule = self.prun_rule(pos_prun, neg_prun, rule)
 
             rule_dl = self.dl(rule)
             if min_dl + self.dl_threshold < rule_dl:
@@ -64,11 +64,166 @@ class ripperk(object):
                 neg = self.remove_cases(neg, [rule])
         return rule_set
 
-    def grow_rule(self, pos, neg, rule=None, rules=None):
-        pass
+    def foil(self, pos, neg, condition, rule=None, ruleset=None):
+        if ruleset is None:
+            ruleset = []
+        if rule is None:
+            rule = {}
+        ruleset.append(rule)
 
-    def prun(self, pos, neg, rule, ruleset=None):
-        pass
+        if ruleset:
+            p0 = np.sum(self.bindings(pos, ruleset))
+            n0 = np.sum(self.bindings(neg, ruleset))
+        else:
+            p0 = len(pos)
+            n0 = len(neg)
+
+        ruleset.pop()
+
+        new_rule = dict(rule)
+        new_rule[condition[0]] = condition[1]
+
+        ruleset.append(new_rule)
+
+        p1 = np.sum(self.bindings(pos, ruleset))
+        n1 = np.sum(self.bindings(neg, ruleset))
+
+        ruleset.pop()
+
+        if p0 == 0:
+            d0 = 0
+        else:
+            d0 = math.log(float(p0) / (float(p0) + float(n0)), 2)
+        
+        if p1 == 0:
+            d1 = 0
+        else:
+            d1 = math.log(float(p1) / (float(p1) + float(n1)), 2)
+
+        return p1 * (d1 - d0)
+
+    def grow_rule(self, pos, neg, rule=None, ruleset=None):
+        if ruleset is None:
+            ruleset = []
+        if rule is None:
+            rule = {}
+
+        pos = self.remove_cases(pos, ruleset)
+        neg = self.remove_cases(neg, ruleset)
+
+        while True:
+            max_gain = -10000
+            max_condition = None
+
+            for condition in self.conditions:
+                if condition[0] in rule:
+                    continue
+
+                gain = self.foil(pos, neg, condition, rule, ruleset)
+                if max_gain < gain:
+                    max_gain = gain
+                    max_condition = condition
+
+            if max_gain <= 0:
+                return rule
+
+            rule[max_condition[0]] = max_condition[1]
+            ruleset.append(rule)
+
+            if self.bindings(neg, ruleset) == 0:
+                return rule
+            
+            ruleset.pop()
+
+    def prun_rule(self, pos, neg, rule, ruleset=None):
+        if ruleset is None:
+            ruleset = []
+
+        # Deep copy our rule.
+        tmp_rule = dict(rule)
+        # Append the rule to the rules list.
+        ruleset.append(tmp_rule)
+        
+        p = self.bindings(pos, ruleset)
+        n = self.bindings(neg, ruleset)
+        
+        # TODO: 无效rule为何不直接返回空dict{}
+        if p == 0 and n == 0:
+            return tmp_rule
+        
+        max_rule = dict(tmp_rule)
+        max_score = (p - n) / float(p + n)
+        
+        keys = list(max_rule.keys())
+        i = -1
+        
+        while len(tmp_rule.keys()) > 1:
+            # Remove the last attribute.
+            # 这里的删减是有序的。但是grow过程的condtition学习真的可以保证先学到的比后学到的好么？
+            del tmp_rule[keys[i]]
+            
+            # Recalculate score.
+            p = self.bindings(pos, ruleset)
+            n = self.bindings(neg, ruleset)
+            
+            tmp_score = (p - n) / float(p + n)
+            
+            # We found a new max score, save rule.
+            if tmp_score > max_score:
+                max_rule = dict(tmp_rule)
+                max_score = tmp_score
+        
+            i -= 1
+        
+        # Remove the rule from the rules list.
+        ruleset.pop()
+        
+        return max_rule        
+
+    def optimize(self, pos, neg, ruleset):
+        new_ruleset = list(ruleset)
+
+        pos_chunk = int(self.prun_ratio * pos.shape[0])
+        neg_chunk = int(self.prun_ratio * neg.shape[0])
+
+        pos_grow = pos.iloc[:pos_chunk, :]
+        neg_grow = neg.iloc[:neg_chunk, :]
+
+        if self.prun_ratio > 0:
+            pos_prun = pos.iloc[pos_chunk:, :]
+            neg_prun = neg.iloc[neg_chunk:, :]
+
+        i = 0
+        while i < len(new_ruleset):
+            rule = new_ruleset.pop(i)
+
+            reprule = self.grow_rule(pos_grow, neg_grow, ruleset=new_ruleset)
+            if self.prun_ratio > 0:
+                reprule = self.prun_rule(pos_prun, neg_prun, reprule, new_ruleset)
+
+            # greedily on whole dataset
+            revrule = self.grow_rule(pos, neg, rule, new_ruleset)
+
+            rule_dl = self.dl(rule)
+            reprule_dl = self.dl(reprule)
+            revrule_dl = self.dl(revrule)
+
+            if (reprule_dl < rule_dl and reprule_dl < revrule_dl):
+                # Don't allow duplicates.
+                if not reprule in new_ruleset:
+                    new_ruleset.insert(i, reprule)
+            elif (revrule_dl < rule_dl and revrule_dl < reprule_dl):
+                # Don't allow duplicates.
+                if not revrule in new_ruleset:
+                    new_ruleset.insert(i, revrule)
+            else:
+                # Don't allow duplicates.
+                if not rule in new_ruleset:
+                    new_ruleset.insert(i, rule)
+            
+            i+= 1
+        
+        return new_ruleset
 
     def dl(self, rule):
         """
