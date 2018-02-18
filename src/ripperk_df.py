@@ -3,7 +3,7 @@ import numpy as np
 import math
 
 class ripperk(object):
-    def __init__(self, prun_ratio, dl_threshold, k=2):
+    def __init__(self, prun_ratio=0.2, dl_threshold=64, k=2):
         self.prun_ratio = prun_ratio
         self.dl_threshold = dl_threshold
         self.k = k
@@ -32,20 +32,32 @@ class ripperk(object):
             self.rulesets[item] = ruleset
 
     def predict(self, df):
-        pass
+        labels = np.array([self.items[0]] * df.shape[0])
+
+        index_bool = np.array([True] * df.shape[0])
+        for item in self.items[1:][::-1]:
+            item_bool = self.bindings(df, self.rulesets[item])
+            item_bool &= index_bool
+            labels[item_bool] = item
+            index_bool &= ~item_bool
+
+        return labels
 
     def irep(self, pos, neg):
         rule_set = []
 
         min_dl = self.init_dl
 
-        while pos:
-            pos_chunk = int(self.prun_ratio * pos.shape[0])
-            neg_chunk = int(self.prun_ratio * neg.shape[0])
+        while pos.shape[0] > 0:
+            pos_chunk = int((1 - self.prun_ratio) * pos.shape[0])
+            neg_chunk = int((1 - self.prun_ratio) * neg.shape[0])
 
             pos_grow = pos.iloc[:pos_chunk, :]
             neg_grow = neg.iloc[:neg_chunk, :]
             rule = self.grow_rule(pos_grow, neg_grow)
+
+            if not rule:
+                return rule_set
 
             if self.prun_ratio > 0:
                 pos_prun = pos.iloc[pos_chunk:, :]
@@ -124,13 +136,15 @@ class ripperk(object):
                     max_gain = gain
                     max_condition = condition
 
+            print(max_gain, max_condition, rule, ruleset, len(pos), len(neg))
+
             if max_gain <= 0:
                 return rule
 
             rule[max_condition[0]] = max_condition[1]
             ruleset.append(rule)
 
-            if self.bindings(neg, ruleset) == 0:
+            if np.sum(self.bindings(neg, ruleset)) == 0:
                 return rule
             
             ruleset.pop()
@@ -144,8 +158,8 @@ class ripperk(object):
         # Append the rule to the rules list.
         ruleset.append(tmp_rule)
         
-        p = self.bindings(pos, ruleset)
-        n = self.bindings(neg, ruleset)
+        p = np.sum(self.bindings(pos, ruleset))
+        n = np.sum(self.bindings(neg, ruleset))
         
         # TODO: 无效rule为何不直接返回空dict{}
         if p == 0 and n == 0:
@@ -163,8 +177,8 @@ class ripperk(object):
             del tmp_rule[keys[i]]
             
             # Recalculate score.
-            p = self.bindings(pos, ruleset)
-            n = self.bindings(neg, ruleset)
+            p = np.sum(self.bindings(pos, ruleset))
+            n = np.sum(self.bindings(neg, ruleset))
             
             tmp_score = (p - n) / float(p + n)
             
@@ -183,8 +197,8 @@ class ripperk(object):
     def optimize(self, pos, neg, ruleset):
         new_ruleset = list(ruleset)
 
-        pos_chunk = int(self.prun_ratio * pos.shape[0])
-        neg_chunk = int(self.prun_ratio * neg.shape[0])
+        pos_chunk = int((1 - self.prun_ratio) * pos.shape[0])
+        neg_chunk = int((1 - self.prun_ratio) * neg.shape[0])
 
         pos_grow = pos.iloc[:pos_chunk, :]
         neg_grow = neg.iloc[:neg_chunk, :]
@@ -256,7 +270,8 @@ class ripperk(object):
                 init_dl += 2
 
         for c in continuous_cols:
-            for v in df[c].unique():
+            _, r = pd.qcut(df[c], q=100, retbins=True, duplicates='drop')
+            for v in r:
                 conditions.append((c, ('>=', v)))
                 conditions.append((c, ('<=', v)))
                 init_dl += 2
@@ -265,26 +280,34 @@ class ripperk(object):
         self.init_dl = init_dl
 
     def bindings(self, df, ruleset):
-        l_t = df.iloc[:, :1].astype(bool)
+        l_t = df[df.columns[0]].astype(bool)
         l_t[l_t==True] = False
 
         for rule in ruleset:
-            l = df.iloc[:, :1].astype(bool)
+            l = df[df.columns[0]].astype(bool)
             l[l==False] = True
-            for condition in rule:
-                if condition[1][0] == '==':
-                    l &= df[condition[0]] == condition[1][1]
-                elif condition[1][0] == '!=':
-                    l &= df[condition[0]] != condition[1][1]
+            for attr, condition in rule.items():
+                if condition[0] == '==':
+                    l &= df[attr] == condition[1]
+                elif condition[0] == '!=':
+                    l &= df[attr] != condition[1]
                 elif condition[0] == '>=':
-                    l &= df[condition[0]] >= condition[1][1]
-                elif condition[1][0] == '<=':
-                    l &= df[condition[0]] <= condition[1][1]
+                    l &= df[attr] >= condition[1]
+                elif condition[0] == '<=':
+                    l &= df[attr] <= condition[1]
             l_t |= l
-        return l_t
+        return np.array(l_t)
 
     def remove_cases(self, df, ruleset):
         l_t = self.bindings(df, ruleset)
         df = df[~l_t]
         return df
+
+if __name__ == '__main__':
+    df = pd.read_csv('/home/muzhen/Dropbox/scripts/knjk/shumei/datasource/total_data.csv')
+    df['yq'] = (df.yq > 7).astype(int)
+    labels = df.pop('yq')
+    df = df.iloc[:, 3:10].fillna(-999)
+    rp = ripperk()
+    rp.fit(df, labels)
 
